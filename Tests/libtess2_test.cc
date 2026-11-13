@@ -1,10 +1,14 @@
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <vector>
 
 #include "gtest/gtest.h"
 #include "tesselator.h"
+#include "tessio.h"
 
 namespace {
 
@@ -136,6 +140,16 @@ TEST_F(Libtess2Test, EmptyPolyline) {
 
 TEST_F(Libtess2Test, SingleLine) {
   AddPolyline(tess, {{0, 0}, {0, 1}});
+  EXPECT_NE(tessTesselate(tess, TESS_WINDING_POSITIVE, TESS_POLYGONS,
+                          kNumTriangleVertices, kComponentCount, nullptr),
+            0);
+  EXPECT_EQ(tessGetElementCount(tess), 0);
+}
+
+TEST_F(Libtess2Test, SingleVertexContour) {
+  // A one-vertex contour used to create a degenerate self-loop edge that
+  // crashed the sweep; it must be ignored instead.
+  AddPolyline(tess, {{1, 1}});
   EXPECT_NE(tessTesselate(tess, TESS_WINDING_POSITIVE, TESS_POLYGONS,
                           kNumTriangleVertices, kComponentCount, nullptr),
             0);
@@ -310,3 +324,122 @@ TEST_F(Libtess2Test, AvoidsCrashInAddRightEdges) {
 }
 
 }  // namespace
+
+namespace {
+
+// Builds a contour container buffer (see Include/tessio.h for the format).
+class ContainerBuilder {
+ public:
+  ContainerBuilder() {
+    AppendU32(TESS_IO_MAGIC);
+    AppendU16(TESS_IO_VERSION);
+    AppendU16(0);
+    count_offset_ = buf_.size();
+    AppendU32(0);
+  }
+
+  void AddRing(std::initializer_list<Vector2f> verts, bool hole = false) {
+    AppendU32(static_cast<uint32_t>(verts.size()));
+    AppendU32(hole ? TESS_IO_FLAG_HOLE : 0u);
+    for (const Vector2f& v : verts) {
+      AppendF32(v.x);
+      AppendF32(v.y);
+    }
+    contour_count_++;
+    memcpy(buf_.data() + count_offset_, &contour_count_, 4);
+  }
+
+  const std::vector<uint8_t>& buf() const { return buf_; }
+  std::vector<uint8_t>& mut_buf() { return buf_; }
+
+ private:
+  void AppendU16(uint16_t v) {
+    buf_.push_back(static_cast<uint8_t>(v));
+    buf_.push_back(static_cast<uint8_t>(v >> 8));
+  }
+  void AppendU32(uint32_t v) {
+    for (int i = 0; i < 4; i++) buf_.push_back(static_cast<uint8_t>(v >> (8 * i)));
+  }
+  void AppendF32(float v) {
+    uint32_t bits;
+    memcpy(&bits, &v, 4);
+    AppendU32(bits);
+  }
+
+  std::vector<uint8_t> buf_;
+  size_t count_offset_ = 0;
+  uint32_t contour_count_ = 0;
+};
+
+}  // namespace
+
+TEST_F(Libtess2Test, ImportValidPolygonWithHole) {
+  ContainerBuilder b;
+  b.AddRing({{0, 0}, {3, 0}, {3, 3}, {0, 3}});
+  b.AddRing({{1, 1}, {2, 1}, {2, 2}, {1, 2}}, /*hole=*/true);
+  EXPECT_EQ(tessImportContours(tess, b.buf().data(), b.buf().size()),
+            TESS_PARSE_OK);
+  EXPECT_NE(tessTesselate(tess, TESS_WINDING_POSITIVE, TESS_POLYGONS,
+                          kNumTriangleVertices, kComponentCount, nullptr),
+            0);
+  EXPECT_EQ(tessGetElementCount(tess), 8);
+}
+
+TEST_F(Libtess2Test, ImportTruncated) {
+  ContainerBuilder b;
+  b.AddRing({{0, 0}, {3, 0}, {3, 3}, {0, 3}});
+  // Cut the buffer mid-vertex.
+  EXPECT_EQ(tessImportContours(tess, b.buf().data(), b.buf().size() - 5),
+            TESS_PARSE_ERR_TRUNCATED);
+  // Header alone is also incomplete.
+  EXPECT_EQ(tessImportContours(tess, b.buf().data(), 4),
+            TESS_PARSE_ERR_TRUNCATED);
+}
+
+TEST_F(Libtess2Test, ImportCoordOutOfRange) {
+  ContainerBuilder b;
+  b.AddRing({{0, 0}, {1e30f, 0}, {0, 3}});
+  EXPECT_EQ(tessImportContours(tess, b.buf().data(), b.buf().size()),
+            TESS_PARSE_ERR_COORD_RANGE);
+
+  ContainerBuilder nan;
+  nan.AddRing({{0, 0}, {std::nanf(""), 0}, {0, 3}});
+  EXPECT_EQ(tessImportContours(tess, nan.buf().data(), nan.buf().size()),
+            TESS_PARSE_ERR_COORD_RANGE);
+}
+
+TEST_F(Libtess2Test, ImportNestingAnomaly) {
+  // Orphan hole: no preceding outer ring.
+  ContainerBuilder orphan;
+  orphan.AddRing({{1, 1}, {2, 1}, {2, 2}, {1, 2}}, /*hole=*/true);
+  EXPECT_EQ(tessImportContours(tess, orphan.buf().data(), orphan.buf().size()),
+            TESS_PARSE_ERR_NESTING);
+
+  // Hole outside its parent outer ring.
+  ContainerBuilder outside;
+  outside.AddRing({{0, 0}, {3, 0}, {3, 3}, {0, 3}});
+  outside.AddRing({{10, 10}, {20, 10}, {20, 20}, {10, 20}}, /*hole=*/true);
+  EXPECT_EQ(tessImportContours(tess, outside.buf().data(), outside.buf().size()),
+            TESS_PARSE_ERR_NESTING);
+
+  // Hole nested inside another hole.
+  ContainerBuilder nested;
+  nested.AddRing({{0, 0}, {10, 0}, {10, 10}, {0, 10}});
+  nested.AddRing({{1, 1}, {9, 1}, {9, 9}, {1, 9}}, /*hole=*/true);
+  nested.AddRing({{2, 2}, {3, 2}, {3, 3}, {2, 3}}, /*hole=*/true);
+  EXPECT_EQ(tessImportContours(tess, nested.buf().data(), nested.buf().size()),
+            TESS_PARSE_ERR_NESTING);
+}
+
+TEST_F(Libtess2Test, ImportBadMagicAndVersion) {
+  ContainerBuilder b;
+  b.AddRing({{0, 0}, {3, 0}, {3, 3}, {0, 3}});
+  std::vector<uint8_t> bad_magic = b.buf();
+  bad_magic[0] ^= 0xff;
+  EXPECT_EQ(tessImportContours(tess, bad_magic.data(), bad_magic.size()),
+            TESS_PARSE_ERR_BAD_MAGIC);
+  std::vector<uint8_t> bad_version = b.buf();
+  bad_version[4] = 99;
+  EXPECT_EQ(tessImportContours(tess, bad_version.data(), bad_version.size()),
+            TESS_PARSE_ERR_UNSUPPORTED_VERSION);
+}

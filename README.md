@@ -42,5 +42,16 @@ in a `Build/` subdirectory in the checkout. The project/directory structure is:
     -   `Contrib/` contains dependencies for the example app.
 *   There is a separate Bazel build, to support testing.
     -   `Tests/` contains the tests.
+*   `Include/tessio.h` / `Source/tessio.c` implement a hardened contour
+    import entry (`tessImportContours`) that validates a binary contour
+    container and reports distinguishable `TessParseError` codes
+    (truncated structure, out-of-range coordinates, ring nesting anomalies)
+    instead of crashing.
+*   `Tools/tess_import.c` is a small CLI for the import entry
+    (`--verify` compares the import path against the direct
+    `tessAddContour()` path vertex by vertex).
+*   `Fuzz/fuzz_import.c` is a standalone fuzz driver for the import entry:
+    `fuzz_import [rounds] [seed]`. Build it with ASan/LSan/UBSan to check
+    for crashes and leaks.
 
 Mikko Mononen memon@inside.org

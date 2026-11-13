@@ -943,6 +943,12 @@ void tessAddContour( TESStesselator *tess, int size, const void* vertices,
 	if ( size > 3 )
 		size = 3;
 
+	/* A contour with a single vertex would create a degenerate self-loop
+	* edge which breaks the sweep invariants; it cannot contribute any
+	* area, so skip it (an empty contour is likewise a no-op). */
+	if ( numVertices < 2 )
+		return;
+
 	e = NULL;
 	for( i = 0; i < numVertices; ++i )
 	{
@@ -1130,4 +1136,3 @@ TESSstatus tessGetStatus( TESStesselator *tess )
 {
 	return tess->status;
 }
-
