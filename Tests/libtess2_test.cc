@@ -309,4 +309,123 @@ TEST_F(Libtess2Test, AvoidsCrashInAddRightEdges) {
             0);
 }
 
+// Golden output test: the exact vertices/elements for normal inputs must
+// never change (vertex-by-vertex regression guard).
+TEST_F(Libtess2Test, GoldenVertexOutputPolygonWithHole) {
+  AddPolygonWithHole(tess);
+  ASSERT_NE(tessTesselate(tess, TESS_WINDING_POSITIVE, TESS_POLYGONS,
+                          kNumTriangleVertices, kComponentCount, nullptr),
+            0);
+
+  const TESSreal kExpectedVertices[] = {3, 3, 2, 2, 3, 0, 1, 2,
+                                        0, 3, 1, 1, 2, 1, 0, 0};
+  const TESSindex kExpectedVertexIndices[] = {2, 6, 1, 7, 3, 4, 5, 0};
+  const TESSindex kExpectedElements[] = {0, 1, 2, 0, 3, 1, 3, 4,
+                                         5, 4, 3, 0, 6, 2, 1, 5,
+                                         2, 6, 5, 7, 2, 7, 5, 4};
+
+  ASSERT_EQ(tessGetVertexCount(tess), 8);
+  ASSERT_EQ(tessGetElementCount(tess), 8);
+  const TESSreal* vertices = tessGetVertices(tess);
+  const TESSindex* vertex_indices = tessGetVertexIndices(tess);
+  const int* elements = tessGetElements(tess);
+  for (int i = 0; i < 16; ++i) {
+    EXPECT_EQ(vertices[i], kExpectedVertices[i]) << "vertex coord " << i;
+  }
+  for (int i = 0; i < 8; ++i) {
+    EXPECT_EQ(vertex_indices[i], kExpectedVertexIndices[i])
+        << "vertex index " << i;
+  }
+  for (int i = 0; i < 24; ++i) {
+    EXPECT_EQ(elements[i], kExpectedElements[i]) << "element " << i;
+  }
+}
+
+TEST_F(Libtess2Test, GoldenVertexOutputStar) {
+  AddPolyline(tess, {{0, -1},
+                     {0.5878f, 0.809f},
+                     {-0.9511f, -0.309f},
+                     {0.9511f, -0.309f},
+                     {-0.5878f, 0.809f}});
+  ASSERT_NE(tessTesselate(tess, TESS_WINDING_ODD, TESS_POLYGONS,
+                          kNumTriangleVertices, kComponentCount, nullptr),
+            0);
+
+  const TESSreal kExpectedVertices[] = {
+      -0.22452724f,  -0.309000015f, -0.363286495f, 0.118042342f,
+      -0.951099992f, -0.308999985f, -7.4505806e-09f, 0.381967455f,
+      -0.587800026f, 0.809000015f,  0.224527255f,  -0.309000015f,
+      0,             -1,            0.587800026f,  0.809000015f,
+      0.363286525f,  0.11804235f,   0.951099992f,  -0.308999985f,
+  };
+  const TESSindex kExpectedElements[] = {0, 1, 2, 3, 4, 1, 5, 0,
+                                         6, 7, 3, 8, 9, 8, 5};
+
+  ASSERT_EQ(tessGetVertexCount(tess), 10);
+  ASSERT_EQ(tessGetElementCount(tess), 5);
+  const TESSreal* vertices = tessGetVertices(tess);
+  const int* elements = tessGetElements(tess);
+  for (int i = 0; i < 20; ++i) {
+    EXPECT_EQ(vertices[i], kExpectedVertices[i]) << "vertex coord " << i;
+  }
+  for (int i = 0; i < 15; ++i) {
+    EXPECT_EQ(elements[i], kExpectedElements[i]) << "element " << i;
+  }
+}
+
+TEST_F(Libtess2Test, DegenerateCdtContourDoesNotCorruptMesh) {
+  // Self-intersecting degenerate contour with CDT enabled. Previously the
+  // edge-flip refinement flipped edges whose adjacent faces were not proper
+  // triangles, corrupting the mesh (assertion failure in tessMeshFlipEdge,
+  // out-of-bounds/undefined behavior downstream in release builds).
+  tessSetOption(tess, TESS_REVERSE_CONTOURS, 1);
+  tessSetOption(tess, TESS_CONSTRAINED_DELAUNAY_TRIANGULATION, 1);
+  AddPolyline(tess, {{2, 1},
+                     {0, -1},
+                     {2, 2},
+                     {-1, -2},
+                     {1, 2},
+                     {1, -1},
+                     {1, 1},
+                     {-1, -1},
+                     {-1, 0},
+                     {1, -2},
+                     {2, -1},
+                     {-2, 2},
+                     {0, 0},
+                     {-2, -1},
+                     {1, 0},
+                     {0, -2},
+                     {1, 0},
+                     {0, 0},
+                     {0, -2},
+                     {-2, 2},
+                     {1, 1},
+                     {-1, -1},
+                     {2, 2},
+                     {-1, 0},
+                     {-1, -2},
+                     {-2, 0},
+                     {0, -1}});
+  tessTesselate(tess, TESS_WINDING_NONZERO, TESS_CONNECTED_POLYGONS,
+                kNumTriangleVertices, kComponentCount, nullptr);
+  // Must not crash or corrupt memory; any return value is acceptable.
+  SUCCEED();
+}
+
+TEST_F(Libtess2Test, DegenerateCdtMergeConvexFacesNullVertex) {
+  // Degenerate 3D contour with CDT enabled and polySize=4. Previously the
+  // CDT edge flips corrupted the mesh, and tessMeshMergeConvexFaces then
+  // dereferenced a null vertex via VertCCW (geom.c).
+  tessSetOption(tess, TESS_CONSTRAINED_DELAUNAY_TRIANGULATION, 1);
+  const float contour[] = {2, 0, 2,  -2, 2, 1,  1, 0, -2, 2, -2, 1, -2, -2, 0,
+                           1, 0, 2,  1, 1, -2, 2, -2, -2, 0, -1, 1, 0, 1, -2,
+                           0, 0, -1, 2, -2, 0, 0, 0, 0};
+  tessAddContour(tess, 3, contour, 3 * sizeof(TESSreal), 13);
+  tessTesselate(tess, TESS_WINDING_NONZERO, TESS_CONNECTED_POLYGONS, 4, 3,
+                nullptr);
+  // Must not crash or corrupt memory; any return value is acceptable.
+  SUCCEED();
+}
+
 }  // namespace

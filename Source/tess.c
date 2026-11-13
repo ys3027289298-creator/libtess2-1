@@ -41,6 +41,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
 
 #define TRUE 1
 #define FALSE 0
@@ -454,6 +455,38 @@ TESShalfEdge *stackPop( EdgeStack *stack )
 
 //	Starting with a valid triangulation, uses the Edge Flip algorithm to
 //	refine the triangulation into a Constrained Delaunay Triangulation.
+
+// tessMeshFlipEdge() requires that both faces adjacent to the edge are
+// triangles, that the two faces share no other edge, and that the flip
+// does not collapse the edge onto itself. Degenerate input can produce
+// meshes where these conditions do not hold; flipping such an edge would
+// corrupt the mesh topology (and lead to out-of-bounds accesses later).
+static int EdgeIsFlippable( TESShalfEdge *e )
+{
+	TESShalfEdge *a1 = e->Lnext;
+	TESShalfEdge *a2 = a1->Lnext;
+	TESShalfEdge *b0 = e->Sym;
+	TESShalfEdge *b1 = b0->Lnext;
+	TESShalfEdge *b2 = b1->Lnext;
+
+	// Both adjacent faces must be triangles.
+	if (a2->Lnext != e || b2->Lnext != b0)
+		return FALSE;
+	// The two faces must not share another edge.
+	if (a1 == b2->Sym || a2 == b1->Sym)
+		return FALSE;
+	// The vertices of each triangle must be distinct, and the flipped
+	// edge (which connects the two opposite vertices) must not become
+	// a zero-length edge.
+	if (a2->Org == e->Org || a2->Org == b0->Org)
+		return FALSE;
+	if (b2->Org == e->Org || b2->Org == b0->Org)
+		return FALSE;
+	if (a2->Org == b2->Org)
+		return FALSE;
+	return TRUE;
+}
+
 void tessMeshRefineDelaunay( TESSmesh *mesh, TESSalloc *alloc )
 {
 	// At this point, we have a valid, but not optimal, triangulation.
@@ -484,7 +517,8 @@ void tessMeshRefineDelaunay( TESSmesh *mesh, TESSalloc *alloc )
 
 	// The algorithm should converge on O(n^2), since the predicate is not robust,
 	// we'll save guard against infinite loop.
-	maxIter = maxFaces * maxFaces;
+	// Guard against signed integer overflow on very large inputs.
+	maxIter = (maxFaces > 46340) ? INT_MAX : maxFaces * maxFaces;
 
 	// Pop stack until we find a reversed edge
 	// Flip the reversed edge, and insert any of the four opposite edges
@@ -492,7 +526,7 @@ void tessMeshRefineDelaunay( TESSmesh *mesh, TESSalloc *alloc )
 	while (!stackEmpty(&stack) && iter < maxIter) {
 		e = stackPop(&stack);
 		e->mark = e->Sym->mark = 0;
-		if (!tesedgeIsLocallyDelaunay(e)) {
+		if (EdgeIsFlippable(e) && !tesedgeIsLocallyDelaunay(e)) {
 			TESShalfEdge *edges[4];
 			int i;
 			tessMeshFlipEdge(mesh, e);
@@ -1130,4 +1164,3 @@ TESSstatus tessGetStatus( TESStesselator *tess )
 {
 	return tess->status;
 }
-
