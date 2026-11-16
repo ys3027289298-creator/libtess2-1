@@ -23,8 +23,12 @@ cc_library(
         "Source/sweep.h",
         "Source/tess.c",
         "Source/tess.h",
+        "Source/coplanar.c",
     ],
-    hdrs = ["Include/tesselator.h"],
+    hdrs = [
+        "Include/tesselator.h",
+        "Include/coplanar.h",
+    ],
     include_prefix = "libtess2",
     includes = ["Include/"],
     strip_include_prefix = "Include",
@@ -38,4 +42,11 @@ cc_test(
         ":libtess2",
         "@googletest//:gtest_main",
     ],
+)
+
+cc_test(
+    name = "coplanar_test",
+    size = "small",
+    srcs = ["Tests/coplanar_test.c"],
+    deps = [":libtess2"],
 )

@@ -26,6 +26,13 @@ contours, polygons and connected polygons. The output of the tesselator can be
 also used as input for new run. I.e. the user may first want to calculate an
 union all the input contours and the triangulate them.
 
+An optional coplanar-overlap resolver (`Include/coplanar.h`,
+`Source/coplanar.c`) detects groups of coplanar, mutually overlapping faces
+(the classic z-fighting case in imported models) and resolves them by either
+merging each group into a single layer or keeping only the largest face;
+see `coplanar.md` for the strategy semantics, validation rules, and
+verification data.
+
 The code is released under SGI FREE SOFTWARE LICENSE B Version 2.0.
 https://directory.fsf.org/wiki/License:SGIFreeBv2
 
